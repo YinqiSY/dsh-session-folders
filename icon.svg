@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Session Categories">
+  <defs>
+    <linearGradient id="sc-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a8ff0"/>
+      <stop offset="1" stop-color="#2f66c4"/>
+    </linearGradient>
+  </defs>
+  <path d="M8 17.5A5.5 5.5 0 0 1 13.5 12h11.2c1.5 0 2.9.6 3.9 1.7l3.3 3.6h18.6a5.5 5.5 0 0 1 5.5 5.5v23.7A5.5 5.5 0 0 1 50.5 52h-37A5.5 5.5 0 0 1 8 46.5z" fill="url(#sc-body)"/>
+  <path d="M8 24.5h48" stroke="#ffffff" stroke-opacity="0.55" stroke-width="2.4" stroke-linecap="round"/>
+  <g fill="#ffffff" fill-opacity="0.92">
+    <rect x="16" y="31" width="15" height="3.4" rx="1.7"/>
+    <rect x="16" y="38" width="24" height="3.4" rx="1.7"/>
+    <rect x="16" y="45" width="10" height="3.4" rx="1.7"/>
+  </g>
+</svg>

@@ -1,0 +1,47 @@
+{
+  "name": "@local/session-categories",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DeepSeek Harness plugin: file conversations into folders inside the sidebar's own session tree, without replacing it.",
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "sessions",
+    "categories",
+    "sidebar"
+  ],
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YinqiSY/dsh-session-folders.git"
+  },
+  "homepage": "https://github.com/YinqiSY/dsh-session-folders#readme",
+  "bugs": {
+    "url": "https://github.com/YinqiSY/dsh-session-folders/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-sidebar"]
+    }
+  }
+}

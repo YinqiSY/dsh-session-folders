@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Categories",
+    "description": "Files conversations into folders inside the sidebar's own session tree: folders fold, reorder by dragging, and conversations move in and out by drag. The shipped list is decorated, never replaced; folders and assignments live in the DSH profile, so workspace files are never touched."
+  }
+}
