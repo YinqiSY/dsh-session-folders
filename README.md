@@ -1,90 +1,82 @@
-# Session Categories
+# 侧边栏会话文件夹
 
-A DeepSeek Harness plugin that groups conversations into folders **inside the sidebar**, without
-taking the sidebar over.
+简体中文 | [English](README.en.md)
 
-## What you get
+给 DeepSeek Harness 的侧边栏加一层「文件夹」：把对话收纳进分类里，可折叠、可拖动排序，拖进拖出即可改变归属。**它不替换官方会话列表**，只是在官方那棵树上做装饰。
 
-The shipped conversation browser keeps rendering everything — it stays the official tree, with its
-search, view options, pin, session menus, drag reordering and archive handling intact. This plugin
-only decorates it:
+## 效果
 
 ```
 会话                                  +
-DSAI                    全选  ▣+  ⋯          ← new-folder button sits in the workspace row
-  ⌄ MC                    4             ⋯     ← folder, collapsible
+DSAI                    全选  ▣+  ⋯          ← 新建分类按钮就在工作区行里
+  ⌄ MC                    4             ⋯     ← 分类，可折叠、可拖动排序
       对话 A
   ⌄ 插件                  1             ⋯
       对话 B
-  ⌄ 未分类                                    ← drop here to unfile
+  ⌄ 未分类                                    ← 拖到这里即移出分类
 ```
 
-- **Workspace row**: the shipped row keeps its own controls; this plugin adds one folder-with-plus
-  button right after the batch-select control, which opens an inline name field under the row.
-- **Folder header**: our own row, inserted into the workspace group. Click folds/unfolds; `⋯` renames
-  or deletes; drag a conversation onto it to file it there; drag one folder header onto another to
-  reorder them.
-- **未分类 header**: the drop target that takes a conversation out of its folder. It folds like a
-  folder does.
-- Conversations themselves are untouched official rows: they keep their click behaviour, their `⋯`
-  menu, their drag-to-reorder, and every other plugin's row decorations.
-- The browser caps each group at a few visible rows and hides the rest behind an "展开其余 N 个会话"
-  row. That control is hidden and clicked once per render, so every conversation is expanded by
-  default and folders always see the full list.
+- **工作区行**：官方原有的按钮全部保留；本插件在「全选」右侧插入一个**文件夹+加号**按钮，点它在行下方就地展开输入框，回车建分类。
+- **分类头**：点标题折叠/展开，`⋯` 可重命名或删除（删除两段式确认，不会误删）；把对话拖到分类头上即归入；把一个分类头拖到另一个上即调整顺序。
+- **未分类头**：可折叠，也是把对话「移出分类」的投放目标。
+- **对话行**：完全是官方行，点击、`⋯` 菜单、置顶、归档、拖拽排序、其它插件的行内按钮全部照常。
 
-## How the grouping works
+## 工作原理
 
-No official node is ever moved. Each workspace group is turned into a flex column, folder headers are
-appended to it, and every official row gets a CSS `order` value that places it inside its folder's
-band. Collapsing a folder only sets `display:none` on the rows it owns, and unfiling restores them.
-Row identity comes from the `data-row-key` the browser already stamps on each row
-(`workspace:<id>` / `session:<id>`), so no React internals are involved.
+不移动任何官方节点：
 
-Everything runs through one rAF-throttled reconciliation pass driven by a `MutationObserver` that
-only reacts to mutations inside the tree region. Each pass is wrapped in try/catch: if the shipped
-markup ever stops looking like this, the plugin does nothing and the sidebar stays exactly as
-shipped.
+1. 把每个工作区分组变成 flex 列，分类头作为自己的节点插入其中；
+2. 给官方行设置 CSS `order`，让它们落在各自分类的「波段」里；
+3. 折叠只是给对应行加 `display:none`，展开即恢复；
+4. 行的身份直接读官方已经打好的 `data-row-key`（`workspace:<id>` / `session:<id>`），不依赖 React 内部结构。
 
-## Compatibility with `deepseek-harness-zh_pro` (v0.11.1)
+官方的「展开其余 N 个会话」截断控件会被隐藏并自动点开一次，所以所有对话默认全部展开，分类也总能看到完整列表。
 
-Because the official rows and slots stay in place, zh_pro keeps every one of its features, including
-the three that need the real row markup: **archive view**, **batch selection**, and **session-deletion
-row cleanup**. Its row selectors (`div[class*="sessionRow"][role="treeitem"]`,
-`div[role="treeitem"][aria-expanded]`) match the official rows exactly as before.
+整个同步过程由一个只关注会话树区域的 `MutationObserver` 驱动、按帧节流，且每一步都包在 try/catch 里：万一官方 DOM 结构变了，插件什么也不做，侧边栏保持原样。
 
-The two plugins stay disjoint where it matters:
+## 与中文增强套件兼容
 
-| Surface | zh_pro | this plugin |
+已验证与 `deepseek-harness-zh_pro` v0.11.1 共存无冲突：官方行与官方槽位都原样保留，所以它的**归档视图、批量选择、删除会话的行清理**等功能全部继续有效。
+
+两者互不重叠：
+
+| 面 | zh_pro | 本插件 |
 |---|---|---|
-| Slot registrations | `conversation.input.left`, `sidebar.right.pane.tab(.title)`, `settings.section` | none |
-| Locale namespaces | its own `SETTINGS_NS` | `session-categories` |
-| Patch row ids | `dsh-zh` | `session-categories` |
-| CSS | hashed `*_module` classes | `dsh-scf-*`, theme tokens only |
-| DOM | reads/praises official rows | inserts `[data-dsh-scf]` nodes, sets `order` / `display` |
+| 槽位注册 | `conversation.input.left`、`sidebar.right.pane.tab`、`settings.section` | 无 |
+| 语言命名空间 | 自己的命名空间 | `session-categories` |
+| 行 id | `dsh-zh` | `session-categories` |
+| CSS | 哈希类名 | 仅 `dsh-scf-*` + 主题 token |
+| DOM | 读写官方行 | 只插入 `[data-dsh-scf]` 节点、设置 `order` / `display` |
 
-One ordering detail is deliberate: folder bands start at `order: 1000` rather than `0`, so a foreign
-node injected with the default `order: 0` (zh_pro's archive section, for example) lands between the
-workspace row and the folders instead of wedging itself between two folders.
+分组波段的起始 `order` 特意定在 1000 而不是 0，这样外部插件以默认 `order:0` 注入的节点会落在「工作区行」与「分类夹」之间，而不是卡进两个分类中间。
 
-## Where the data lives
+## 数据位置
 
 ```
 <DSH_PROFILE_DIR>/data/session-categories/state.json
 ```
 
-The plugin never creates, moves, renames, or deletes anything inside a workspace directory, and it
-never touches Session logs. Deleting a folder only drops the assignments; the conversations stay
-where they are and simply reappear under 未分类.
+插件不会在工作区目录里创建、移动或改名任何文件，也不会碰会话日志。删除分类只是解除归属，对话会回到「未分类」。
 
-## Agent access
+## 安装
 
-The same operations are exposed as the `session_categories` tool (`list`, `create`, `rename`, `delete`,
-`assign`, `unassign`), backed by the identical Host functions the UI calls.
+```sh
+dsh plugin --profile web add github:YinqiSY/dsh-session-folders
+```
 
-## Guardrails
+或者在插件管理里以本地目录方式安装（开发时更常用）。
 
-A broken profile entry fails the desktop's web boot outright, so:
+## Agent 工具
 
-- the Host entry activates synchronously and defers only its registrations (`whenService`);
-- the Client `apply` never throws, and the DOM layer reports its first successful pass, plus any
-  failure, to `<state dir>/client.log`.
+同一套操作也暴露为 `session_categories` 工具（`list` / `create` / `rename` / `delete` / `assign` / `unassign`），与 UI 调用完全相同的宿主函数。
+
+## 护栏
+
+在桌面端，只要有一个 profile 条目没激活，整个 web 启动就会失败，所以：
+
+- 宿主条目**同步激活**，只把注册延后到服务就绪（`whenService`）；
+- 客户端 `apply` 永不抛异常，DOM 层会把每次行数变化（包括掉到 0）和任何失败写入 `<数据目录>/client.log`，日志超过 256 KB 自动清空。
+
+## 许可
+
+MIT
