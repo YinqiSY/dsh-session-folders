@@ -320,7 +320,7 @@ window.__ModuleLoader__.load({
       const collapsed = new Map()
       const order = new Map()
       const touched = new Set()
-      const clickedOverflow = new WeakSet()
+      const clickedOverflow = new WeakMap()
       let observer = null
       let scheduled = 0
       let busy = false
@@ -349,17 +349,27 @@ window.__ModuleLoader__.load({
       const reportState = (tree, folders, model) => {
         if (!model || model.phase !== 'ready' || !Array.isArray(model.workspaces) || model.workspaces.length === 0) return
         let groups = 0
-        let rows = 0
+        const rendered = new Set()
         for (const group of groupsOf(tree)) {
           groups += 1
-          rows += entriesOf(group).length
+          for (const item of entriesOf(group)) rendered.add(item.sessionId)
         }
+        const rows = rendered.size
         if (groups === 0 || rows === lastRows) return
         lastRows = rows
         const projectRow = tree.querySelector('[data-row-key^="workspace:"]')
         const expanded = projectRow ? (projectRow.getAttribute('aria-expanded') || 'na') : 'na'
+        // Anything the model knows but the browser does not render is archived (or otherwise
+        // filtered) — naming it turns "some sessions are missing" into a fact.
+        const missing = []
+        for (const workspace of model.workspaces) {
+          for (const session of workspace.sessions || []) {
+            if (!rendered.has(session.id)) missing.push(session.title || session.id)
+          }
+        }
         report('dom pass groups=' + groups + ' rows=' + rows + ' expanded=' + expanded
-          + ' folders=' + (folders.join(',') || '-'))
+          + ' folders=' + (folders.join(',') || '-')
+          + ' missing=' + (missing.slice(0, 6).join(' | ') || '-'))
       }
 
       const schedule = () => {
@@ -686,6 +696,13 @@ window.__ModuleLoader__.load({
           const folders = []
           const modelById = new Map((model.workspaces || []).map(entry => [entry.id, entry]))
 
+          // Rows another plugin renders for archived conversations are not draggable; opt them in
+          // so an archived conversation can still be filed. React never set this property, so it
+          // survives re-renders; the pass restores it if a rebuild drops it.
+          for (const row of Array.from(tree.querySelectorAll('[data-dsh-zh-archive-row]'))) {
+            if (row.draggable !== true) row.draggable = true
+          }
+
           for (const group of groupsOf(tree)) {
             if (!group.classList.contains('dsh-scf-group')) group.classList.add('dsh-scf-group')
 
@@ -715,12 +732,13 @@ window.__ModuleLoader__.load({
               node.nodeType === 1 && keyOf(node).indexOf('overflow:') === 0)
             if (overflow) {
               setHidden(overflow, true)
-              // After expanding, the same control turns into "收起其余" — clicking that would cap
-              // the group again, so only an expand affordance is ever activated. The guard is keyed
-              // by element, so a control rebuilt by a re-render is expanded again.
+              // The control expands in chunks, so one click can leave rows behind; it also turns
+              // into "收起其余" once everything is shown, and clicking that would cap the group
+              // again. Activate an expand affordance up to three times, then stop.
               const label = String(overflow.textContent || '')
-              if (/展开|Expand/i.test(label) && !clickedOverflow.has(overflow)) {
-                clickedOverflow.add(overflow)
+              const attempts = clickedOverflow.get(overflow) || 0
+              if (/展开|Expand/i.test(label) && attempts < 3) {
+                clickedOverflow.set(overflow, attempts + 1)
                 try {
                   overflow.click()
                 } catch {
@@ -797,6 +815,14 @@ window.__ModuleLoader__.load({
       const onDragStart = (event) => {
         const target = event.target
         if (!target || typeof target.closest !== 'function') return
+        const archiveRow = target.closest('[data-dsh-zh-archive-row]')
+        if (archiveRow) {
+          // Another plugin's archive view renders its own rows; they carry the Session id in its
+          // own attribute and are not draggable by default, so this plugin opts them in.
+          dragSessionId = archiveRow.getAttribute('data-dsh-zh-archive-id') || null
+          pressedSessionId = dragSessionId
+          return
+        }
         const row = target.closest('[data-row-key^="session:"]')
         dragSessionId = row ? idFromKey(row.getAttribute(KEY) || '', 'session:') : null
       }
@@ -806,6 +832,11 @@ window.__ModuleLoader__.load({
       const onPointerDown = (event) => {
         const target = event.target
         if (!target || typeof target.closest !== 'function') return
+        const archiveRow = target.closest('[data-dsh-zh-archive-row]')
+        if (archiveRow) {
+          pressedSessionId = archiveRow.getAttribute('data-dsh-zh-archive-id') || null
+          return
+        }
         const row = target.closest('[data-row-key^="session:"]')
         pressedSessionId = row ? idFromKey(row.getAttribute(KEY) || '', 'session:') : null
       }
