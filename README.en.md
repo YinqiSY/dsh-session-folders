@@ -1,4 +1,4 @@
-# Sidebar Session Folders
+# Session Category Folders
 
 [简体中文](README.md) | English
 
@@ -91,6 +91,20 @@ On the desktop build, one profile entry that fails to activate fails the whole w
 - the Host entry activates synchronously and defers only its registrations (`whenService`);
 - the Client `apply` never throws, and the DOM layer reports every row-count change (including a
   drop to zero) plus any failure to `<data dir>/client.log`, which is cleared past 256 KB.
+
+## Changelog
+
+### 1.0.0
+
+- First release: file conversations into folders inside each workspace group; folders fold,
+  reorder by drag, and conversations move in and out by drag.
+- Folders and assignments persist in the DSH profile; workspace files and session logs are untouched.
+- Hides and activates the shipped "expand the remaining N conversations" control, so every
+  conversation is expanded by default.
+- Fixed: the shipped control expands in chunks, which could leave rows behind; it is now retried up
+  to three times.
+- Fixed: archived conversations in the archive view were not draggable; they can now be dragged into
+  a folder.
 
 ## License
 
