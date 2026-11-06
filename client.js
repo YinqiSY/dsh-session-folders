@@ -23,6 +23,25 @@ window.__ModuleLoader__.load({
     const NS = 'session-categories'
     const OWN = 'data-dsh-scf'
 
+    /**
+     * Fire-and-forget diagnostic to the Host. Without devtools this is the only channel that can
+     * say whether the module loaded, where it stopped, and how the tree looked.
+     * @param message - one line of text.
+     */
+    function send(message) {
+      try {
+        void fetch(API + '/log', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ message: String(message) }),
+        })
+      } catch {
+        // Best effort.
+      }
+    }
+
+    send('client module loaded')
+
     const EN = {
       uncategorized: 'Uncategorized',
       newFolder: 'New folder',
@@ -116,7 +135,11 @@ window.__ModuleLoader__.load({
             const response = await fetch(API + '/state', { headers: { accept: 'application/json' } })
             if (!response.ok) throw new Error('HTTP ' + response.status)
             const data = await response.json()
-            publish({ phase: 'ready', workspaces: Array.isArray(data.workspaces) ? data.workspaces : [] })
+            publish({
+              phase: 'ready',
+              workspaces: Array.isArray(data.workspaces) ? data.workspaces : [],
+              ui: data.ui && typeof data.ui === 'object' ? data.ui : { expanded: {} },
+            })
           } catch (error) {
             publish({ phase: 'error', workspaces: [] })
             report('state fetch failed: ' + String((error && error.message) || error))
@@ -143,10 +166,13 @@ window.__ModuleLoader__.load({
           throw new Error((data && data.error) || ('HTTP ' + response.status))
         }
         if (data.model) {
-          publish({ phase: 'ready', workspaces: Array.isArray(data.model.workspaces) ? data.model.workspaces : [] })
-        } else {
-          await refresh()
+          publish({
+            phase: 'ready',
+            workspaces: Array.isArray(data.model.workspaces) ? data.model.workspaces : [],
+            ui: data.model.ui && typeof data.model.ui === 'object' ? data.model.ui : { expanded: {} },
+          })
         }
+        // Operations without a model (fold state) change nothing the list shows, so no refresh.
       }
 
       return {
@@ -303,6 +329,7 @@ window.__ModuleLoader__.load({
      * @param report - diagnostic sink.
      */
     function install(ctx, report) {
+      report('layer install')
       const store = createStore(report)
       let t = key => ZH[key] || EN[key] || key
       try {
@@ -317,7 +344,9 @@ window.__ModuleLoader__.load({
         // Keep the bundled dictionary.
       }
 
-      const collapsed = new Map()
+      // Heads start folded: after a restart nothing is expanded until the user opens it, so the
+      // sidebar always comes back in the same quiet state.
+      const expandedHeads = new Map()
       const order = new Map()
       const touched = new Set()
       const clickedOverflow = new WeakMap()
@@ -325,6 +354,9 @@ window.__ModuleLoader__.load({
       let scheduled = 0
       let busy = false
       let lastRows = -1
+      let lastArchiveRows = -1
+      let seededPrefs = false
+      let treeMissingReported = false
       let dragSessionId = null
       let dragCategoryId = null
       let pressedSessionId = null
@@ -350,9 +382,18 @@ window.__ModuleLoader__.load({
         if (!model || model.phase !== 'ready' || !Array.isArray(model.workspaces) || model.workspaces.length === 0) return
         let groups = 0
         const rendered = new Set()
+        let draggableRows = 0
+        let visibleRows = 0
+        const stuck = []
         for (const group of groupsOf(tree)) {
           groups += 1
-          for (const item of entriesOf(group)) rendered.add(item.sessionId)
+          for (const item of entriesOf(group)) {
+            rendered.add(item.sessionId)
+            if (item.wrap.style.display !== 'none') visibleRows += 1
+            const row = item.wrap.querySelector('[data-row-key]') || item.wrap
+            if (row.draggable === true) draggableRows += 1
+            else if (stuck.length < 4) stuck.push(item.sessionId + '@' + (row.className || ''))
+          }
         }
         const rows = rendered.size
         if (groups === 0 || rows === lastRows) return
@@ -367,9 +408,11 @@ window.__ModuleLoader__.load({
             if (!rendered.has(session.id)) missing.push(session.title || session.id)
           }
         }
-        report('dom pass groups=' + groups + ' rows=' + rows + ' expanded=' + expanded
+        report('dom pass groups=' + groups + ' rows=' + rows + ' draggable=' + draggableRows
+          + ' visible=' + visibleRows + ' expanded=' + expanded
           + ' folders=' + (folders.join(',') || '-')
-          + ' missing=' + (missing.slice(0, 6).join(' | ') || '-'))
+          + ' missing=' + (missing.slice(0, 6).join(' | ') || '-')
+          + ' stuck=' + (stuck.join(' ; ') || '-'))
       }
 
       const schedule = () => {
@@ -529,14 +572,20 @@ window.__ModuleLoader__.load({
         head.addEventListener('click', (event) => {
           if (event.target && typeof event.target.closest === 'function' && event.target.closest('.dsh-scf-pop')) return
           const key = category ? category.id : ('uncategorized:' + workspaceId)
-          collapsed.set(key, collapsed.get(key) !== true)
+          const next = expandedHeads.get(key) !== true
+          expandedHeads.set(key, next)
           schedule()
+          // Remembered for the next launch; a failed write only loses the preference.
+          void store.operate({ op: 'expand', key, value: next }).catch(() => {})
         })
 
         head.addEventListener('dragover', (event) => {
           event.preventDefault()
           if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-          head.setAttribute('data-drop', 'true')
+          if (head.getAttribute('data-drop') !== 'true') {
+            head.setAttribute('data-drop', 'true')
+            report('dragover ' + (category ? category.name : 'uncategorized'))
+          }
         })
         head.addEventListener('dragleave', () => head.removeAttribute('data-drop'))
         head.addEventListener('drop', (event) => {
@@ -544,6 +593,10 @@ window.__ModuleLoader__.load({
           event.stopPropagation()
           head.removeAttribute('data-drop')
           const movedCategory = dragCategoryId
+          const draggedSession = dragSessionId || pressedSessionId
+            || (event.dataTransfer ? event.dataTransfer.getData('text/plain') : '')
+          report('drop target=' + (category ? category.name : 'uncategorized')
+            + ' session=' + (draggedSession || 'none') + ' folder=' + (movedCategory || 'none'))
           dragCategoryId = null
           if (movedCategory) {
             if (!category || movedCategory === category.id) return
@@ -552,8 +605,7 @@ window.__ModuleLoader__.load({
               .catch(showError)
             return
           }
-          const sessionId = dragSessionId || pressedSessionId
-            || (event.dataTransfer ? event.dataTransfer.getData('text/plain') : '')
+          const sessionId = draggedSession
           if (!sessionId) return
           const request = category
             ? store.operate({ op: 'assign', workspaceId, sessionId, categoryId: category.id })
@@ -691,16 +743,37 @@ window.__ModuleLoader__.load({
         busy = true
         try {
           const tree = treeOf()
-          if (!tree) return
+          if (!tree) {
+            if (!treeMissingReported) {
+              treeMissingReported = true
+              report('tree not found: div[data-slot="sidebar.workspaces"] [role="tree"]')
+            }
+            return
+          }
+          treeMissingReported = false
           const model = store.get()
+          // Adopt the fold state the user left behind, once, as soon as the Host model lands.
+          if (!seededPrefs && model.phase === 'ready') {
+            seededPrefs = true
+            const stored = (model.ui && model.ui.expanded) || {}
+            for (const [key, value] of Object.entries(stored)) expandedHeads.set(key, value === true)
+          }
           const folders = []
           const modelById = new Map((model.workspaces || []).map(entry => [entry.id, entry]))
 
-          // Rows another plugin renders for archived conversations are not draggable; opt them in
-          // so an archived conversation can still be filed. React never set this property, so it
-          // survives re-renders; the pass restores it if a rebuild drops it.
-          for (const row of Array.from(tree.querySelectorAll('[data-dsh-zh-archive-row]'))) {
+          // The shipped browser renders archived conversations inline but leaves them
+          // non-draggable so their order cannot change. Folders need to move them, so they are
+          // opted in here too, next to the rows another plugin renders for archived conversations.
+          let archiveRows = 0
+          for (const row of Array.from(tree.querySelectorAll(
+            '[data-dsh-zh-archive-row], [data-row-key^="session:"][class*="archived"]',
+          ))) {
+            archiveRows += 1
             if (row.draggable !== true) row.draggable = true
+          }
+          if (archiveRows !== lastArchiveRows) {
+            lastArchiveRows = archiveRows
+            report('archive rows=' + archiveRows)
           }
 
           for (const group of groupsOf(tree)) {
@@ -771,7 +844,7 @@ window.__ModuleLoader__.load({
             let band = 0
             for (const category of categories) {
               const members = filed.get(category.id) || []
-              const expanded = collapsed.get(category.id) !== true
+              const expanded = expandedHeads.get(category.id) === true
               const head = ensureHead(group, workspaceId, category, members.length, expanded)
               setOrder(head, 1000 + band * 10000)
               paintHead(head, expanded, members.length)
@@ -785,7 +858,7 @@ window.__ModuleLoader__.load({
 
             if (categories.length > 0 || loose.length > 0) {
               const looseKey = 'uncategorized:' + workspaceId
-              const looseExpanded = collapsed.get(looseKey) !== true
+              const looseExpanded = expandedHeads.get(looseKey) === true
               const looseHead = ensureHead(group, workspaceId, null, loose.length, looseExpanded)
               setOrder(looseHead, 1000 + band * 10000)
               paintHead(looseHead, looseExpanded, loose.length)
@@ -821,10 +894,12 @@ window.__ModuleLoader__.load({
           // own attribute and are not draggable by default, so this plugin opts them in.
           dragSessionId = archiveRow.getAttribute('data-dsh-zh-archive-id') || null
           pressedSessionId = dragSessionId
+          report('archive dragstart id=' + (dragSessionId || 'none'))
           return
         }
         const row = target.closest('[data-row-key^="session:"]')
         dragSessionId = row ? idFromKey(row.getAttribute(KEY) || '', 'session:') : null
+        if (dragSessionId) report('dragstart session=' + dragSessionId)
       }
 
       // The shipped drag implementation may not put anything on the dataTransfer, so remember the
@@ -913,17 +988,8 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        const report = (message) => {
-          try {
-            void fetch(API + '/log', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ message: String(message) }),
-            })
-          } catch {
-            // Diagnostics are best effort.
-          }
-        }
+        const report = send
+        report('apply start')
 
         const register = (namespace, locale, dict) => {
           try {

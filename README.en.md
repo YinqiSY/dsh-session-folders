@@ -94,6 +94,16 @@ On the desktop build, one profile entry that fails to activate fails the whole w
 
 ## Changelog
 
+### 1.0.1
+
+- Adapted to DeepSeek Harness 0.2.2-rc.1: the new build renders archived conversations inline and
+  marks them non-draggable; they can be dragged into a folder again.
+- Folder fold state is remembered, so the sidebar comes back the way it was left.
+- The data directory is now fixed at `~/.dsh/session-categories/`; it no longer depends on
+  `DSH_PROFILE_DIR` (the new Host no longer sets it, which had moved the categories into another
+  profile). On first run the newest legacy `<profile>/data/session-categories/state.json` is
+  adopted, so existing folders survive.
+
 ### 1.0.0
 
 - First release: file conversations into folders inside each workspace group; folders fold,

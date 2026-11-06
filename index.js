@@ -8,7 +8,7 @@
  *
  * @module @local/session-categories
  */
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -21,21 +21,57 @@ const MAX_LOG_BYTES = 256 * 1024
 const TITLE_CACHE_MS = 15000
 
 /**
- * Resolve this profile's private data directory, never a workspace path.
+ * Resolve the plugin's own data directory, never a workspace path.
  *
- * `DSH_PROFILE_DIR` is set for every profile-launched Harness. The fallback only has to stay inside
- * the user's own DSH home and must not name one particular profile.
+ * This deliberately does NOT depend on `DSH_PROFILE_DIR`: some desktop builds launch the Host
+ * without it, and a per-profile path would then silently switch stores when the launch changes
+ * (that is exactly how the categories ended up split across two profiles once). One fixed
+ * directory under the user's own DSH home keeps the data where it is, across upgrades and
+ * profiles. The data is keyed by Workspace id, so sharing it across profiles is harmless.
  */
 function resolveDataDir() {
-  const configured = process.env.DSH_PROFILE_DIR
-  if (configured && configured.length > 0) return join(configured, 'data', PLUGIN_ID)
-  const profile = process.env.DSH_PROFILE && process.env.DSH_PROFILE.length > 0
-    ? process.env.DSH_PROFILE
-    : 'default'
-  return join(homedir(), '.dsh', 'profiles', profile, 'data', PLUGIN_ID)
+  return join(homedir(), '.dsh', PLUGIN_ID)
 }
 
-const STATE_FILE = join(resolveDataDir(), 'state.json')
+const DATA_DIR = resolveDataDir()
+const STATE_FILE = join(DATA_DIR, 'state.json')
+const LEGACY_PROFILES = join(homedir(), '.dsh', 'profiles')
+
+/**
+ * Adopt the newest legacy per-profile state file when this directory has none yet. Older builds
+ * wrote to `<profile>/data/session-categories/state.json`; the most recently written one wins.
+ */
+async function adoptLegacyState() {
+  try {
+    await stat(STATE_FILE)
+    return
+  } catch {
+    // No state here yet; look for a legacy one.
+  }
+  let best = null
+  try {
+    const entries = await readdir(LEGACY_PROFILES, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const candidate = join(LEGACY_PROFILES, entry.name, 'data', PLUGIN_ID, 'state.json')
+      try {
+        const info = await stat(candidate)
+        if (!best || info.mtimeMs > best.mtimeMs) best = { file: candidate, mtimeMs: info.mtimeMs }
+      } catch {
+        // No state in that profile.
+      }
+    }
+  } catch {
+    return
+  }
+  if (!best) return
+  try {
+    await mkdir(DATA_DIR, { recursive: true })
+    await copyFile(best.file, STATE_FILE)
+  } catch {
+    // A failed adoption just starts empty; the legacy file is left untouched.
+  }
+}
 
 // No module-level `inject`: an entry that is still waiting for a service when the desktop web boot
 // finishes makes that boot fail. `whenService` defers only the registration instead.
@@ -48,7 +84,13 @@ function emptyWorkspaceRecord() {
 }
 
 function normalizeState(raw) {
-  const next = { version: STATE_VERSION, workspaces: {} }
+  const next = { version: STATE_VERSION, workspaces: {}, ui: { expanded: {} } }
+  const expanded = raw && typeof raw === 'object' && raw.ui && typeof raw.ui.expanded === 'object'
+    ? raw.ui.expanded
+    : {}
+  for (const [key, value] of Object.entries(expanded)) {
+    if (typeof value === 'boolean') next.ui.expanded[key] = value
+  }
   const workspaces = raw && typeof raw === 'object' && raw.workspaces && typeof raw.workspaces === 'object'
     ? raw.workspaces
     : {}
@@ -69,6 +111,7 @@ function normalizeState(raw) {
 
 async function loadState() {
   if (cache) return cache
+  await adoptLegacyState()
   try {
     const raw = await readFile(STATE_FILE, 'utf8')
     cache = normalizeState(JSON.parse(raw))
@@ -166,6 +209,7 @@ async function buildModel(ctx) {
     version: STATE_VERSION,
     dataFile: STATE_FILE,
     workspaces: projected,
+    ui: { expanded: { ...state.ui.expanded } },
   }
 }
 
@@ -184,6 +228,18 @@ function requireName(value, fallback) {
  */
 async function applyOperation(ctx, input) {
   const op = typeof input.op === 'string' ? input.op : ''
+
+  // Fold state is workspace-independent: the key is either a category id or `uncategorized:<ws>`.
+  // It is persisted so the sidebar comes back exactly as it was left.
+  if (op === 'expand') {
+    const key = typeof input.key === 'string' ? input.key : ''
+    if (key.length === 0) return { ok: false, error: 'missing-key' }
+    const expandedState = await loadState()
+    expandedState.ui.expanded[key] = input.value === true
+    await persist()
+    return { ok: true }
+  }
+
   const workspaceId = typeof input.workspaceId === 'string' ? input.workspaceId : ''
   if (workspaceId.length === 0) return { ok: false, error: 'missing-workspace' }
   const known = listWorkspaces(ctx).some(workspace => String(workspace.id) === workspaceId)

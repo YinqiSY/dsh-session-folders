@@ -79,6 +79,12 @@ dsh plugin --profile web add github:YinqiSY/dsh-session-folders
 
 ## 更新记录
 
+### 1.0.1
+
+- 适配 DeepSeek Harness 0.2.2-rc.1：新版把归档会话直接渲染在列表里并禁止拖拽，现在这些行也能拖进分类。
+- 分类的折叠/展开状态会被记住，重开 DSH 后与上次关闭时一致。
+- 数据目录改为固定的 `~/.dsh/session-categories/`，不再依赖 `DSH_PROFILE_DIR`（新版宿主不再设置它，曾导致分类数据被写到另一个 profile）。首次运行会自动接管旧的 `<profile>/data/session-categories/state.json`，取最新的一份，已有分类不丢。
+
 ### 1.0.0
 
 - 首个版本：在侧边栏的工作区分组里用文件夹收纳对话，可折叠、可拖动排序、拖进拖出改变归属。
