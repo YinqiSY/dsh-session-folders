@@ -1,6 +1,6 @@
 {
   "name": "@local/session-categories",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "DeepSeek Harness plugin: file conversations into folders inside the sidebar's own session tree, without replacing it.",
   "license": "MIT",

@@ -18,6 +18,7 @@ const STATE_VERSION = 1
 const TOOL_NAME = 'session_categories'
 const MAX_BODY_BYTES = 512 * 1024
 const MAX_LOG_BYTES = 256 * 1024
+const MAX_FOLD_KEYS = 400
 const TITLE_CACHE_MS = 15000
 
 /**
@@ -182,10 +183,70 @@ async function readTitles(ctx, sessionIds) {
   return titles
 }
 
+/**
+ * Drop state nothing can observe any more, so the file cannot grow forever.
+ *
+ * Removes workspaces the registry no longer knows, assignments to sessions that no longer belong
+ * to their workspace, workspace records that became empty, and fold keys whose folder is gone. Fold
+ * state is also capped: it is a preference, not a log.
+ * @param state - the loaded state, mutated in place.
+ * @param workspaces - the live workspace entities.
+ * @returns whether anything was removed.
+ */
+function pruneState(state, workspaces) {
+  let changed = false
+  const liveWorkspaces = new Map(workspaces.map(workspace => [
+    String(workspace.id),
+    new Set(Array.from(workspace.sessionIds || [], id => String(id))),
+  ]))
+
+  for (const [workspaceId, record] of Object.entries(state.workspaces)) {
+    const liveSessions = liveWorkspaces.get(workspaceId)
+    if (!liveSessions) {
+      delete state.workspaces[workspaceId]
+      changed = true
+      continue
+    }
+    for (const sessionId of Object.keys(record.assignments)) {
+      if (!liveSessions.has(sessionId)) {
+        delete record.assignments[sessionId]
+        changed = true
+      }
+    }
+    if (record.categories.length === 0 && Object.keys(record.assignments).length === 0) {
+      delete state.workspaces[workspaceId]
+      changed = true
+    }
+  }
+
+  const validKeys = new Set()
+  for (const [workspaceId, record] of Object.entries(state.workspaces)) {
+    for (const category of record.categories) validKeys.add(category.id)
+    validKeys.add('uncategorized:' + workspaceId)
+  }
+  for (const key of Object.keys(state.ui.expanded)) {
+    if (!validKeys.has(key)) {
+      delete state.ui.expanded[key]
+      changed = true
+    }
+  }
+  const foldKeys = Object.keys(state.ui.expanded)
+  if (foldKeys.length > MAX_FOLD_KEYS) {
+    for (const key of foldKeys.slice(MAX_FOLD_KEYS)) {
+      delete state.ui.expanded[key]
+      changed = true
+    }
+  }
+  return changed
+}
+
 /** Build the complete Client model: workspaces, their sessions, categories, and assignments. */
 async function buildModel(ctx) {
   const state = await loadState()
   const workspaces = listWorkspaces(ctx)
+  // Never prune against an empty registry: that would read as "every workspace is gone" and wipe
+  // the user's folders during a startup window where the registry has not published yet.
+  if (workspaces.length > 0 && pruneState(state, workspaces)) await persist()
   const allSessionIds = []
   const projected = workspaces.map((workspace) => {
     const record = state.workspaces[workspace.id] || emptyWorkspaceRecord()

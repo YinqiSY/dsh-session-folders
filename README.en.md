@@ -94,6 +94,16 @@ On the desktop build, one profile entry that fails to activate fails the whole w
 
 ## Changelog
 
+### 1.0.2
+
+- Performance: the DOM observer no longer runs a document-wide query on every mutation, so chat
+  streaming is effectively free.
+- Performance: a write no longer triggers an extra `/state` request and model rebuild.
+- Performance: the new-folder button lookup is memoized; the steady state does one attribute check.
+- Added: stale state is pruned while the model is built — deleted workspaces, assignments to
+  sessions that no longer belong to their workspace, and fold keys for removed folders; fold state
+  is capped at 400 entries.
+
 ### 1.0.1
 
 - Adapted to DeepSeek Harness 0.2.2-rc.1: the new build renders archived conversations inline and

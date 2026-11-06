@@ -350,12 +350,14 @@ window.__ModuleLoader__.load({
       const order = new Map()
       const touched = new Set()
       const clickedOverflow = new WeakMap()
+      const headerAddMemo = new WeakSet()
       let observer = null
       let scheduled = 0
       let busy = false
       let lastRows = -1
       let lastArchiveRows = -1
       let seededPrefs = false
+      let cachedTree = null
       let treeMissingReported = false
       let dragSessionId = null
       let dragCategoryId = null
@@ -380,24 +382,29 @@ window.__ModuleLoader__.load({
        */
       const reportState = (tree, folders, model) => {
         if (!model || model.phase !== 'ready' || !Array.isArray(model.workspaces) || model.workspaces.length === 0) return
+        // Collect first, then bail on an unchanged count: the per-row walk below (and its
+        // querySelector) is the expensive half of a pass and must not run for nothing.
         let groups = 0
+        const items = []
+        for (const group of groupsOf(tree)) {
+          groups += 1
+          for (const item of entriesOf(group)) items.push(item)
+        }
+        if (groups === 0 || items.length === lastRows) return
+        lastRows = items.length
+
         const rendered = new Set()
         let draggableRows = 0
         let visibleRows = 0
         const stuck = []
-        for (const group of groupsOf(tree)) {
-          groups += 1
-          for (const item of entriesOf(group)) {
-            rendered.add(item.sessionId)
-            if (item.wrap.style.display !== 'none') visibleRows += 1
-            const row = item.wrap.querySelector('[data-row-key]') || item.wrap
-            if (row.draggable === true) draggableRows += 1
-            else if (stuck.length < 4) stuck.push(item.sessionId + '@' + (row.className || ''))
-          }
+        for (const item of items) {
+          rendered.add(item.sessionId)
+          if (item.wrap.style.display !== 'none') visibleRows += 1
+          const row = item.wrap.querySelector('[data-row-key]') || item.wrap
+          if (row.draggable === true) draggableRows += 1
+          else if (stuck.length < 4) stuck.push(item.sessionId + '@' + (row.className || ''))
         }
         const rows = rendered.size
-        if (groups === 0 || rows === lastRows) return
-        lastRows = rows
         const projectRow = tree.querySelector('[data-row-key^="workspace:"]')
         const expanded = projectRow ? (projectRow.getAttribute('aria-expanded') || 'na') : 'na'
         // Anything the model knows but the browser does not render is archived (or otherwise
@@ -488,7 +495,6 @@ window.__ModuleLoader__.load({
           pop.remove()
           createInput(head, category.name, t('renameFolder'), value => {
             store.operate({ op: 'rename', workspaceId, categoryId: category.id, name: value })
-              .then(() => store.refresh())
               .catch(showError)
           })
         })
@@ -506,7 +512,6 @@ window.__ModuleLoader__.load({
           }
           pop.remove()
           store.operate({ op: 'delete', workspaceId, categoryId: category.id })
-            .then(() => store.refresh())
             .catch(showError)
         })
         pop.appendChild(remove)
@@ -601,7 +606,6 @@ window.__ModuleLoader__.load({
           if (movedCategory) {
             if (!category || movedCategory === category.id) return
             store.operate({ op: 'move', workspaceId, categoryId: movedCategory, beforeId: category.id })
-              .then(() => store.refresh())
               .catch(showError)
             return
           }
@@ -610,7 +614,7 @@ window.__ModuleLoader__.load({
           const request = category
             ? store.operate({ op: 'assign', workspaceId, sessionId, categoryId: category.id })
             : store.operate({ op: 'unassign', workspaceId, sessionId })
-          request.then(() => store.refresh()).catch(showError)
+          request.catch(showError)
         })
 
         return head
@@ -649,7 +653,16 @@ window.__ModuleLoader__.load({
       const ensureHeaderAdd = (group, workspaceId) => {
         const projectRow = group.querySelector('[data-row-key^="workspace:"]')
         if (!projectRow) return
-        if (projectRow.querySelector('[' + OWN + '="add"]')) return
+        // Fast path for the steady state: this runs on every pass, and a React re-render of the row
+        // only drops the button when it rebuilds the row node itself.
+        if (headerAddMemo.has(projectRow)) {
+          const kept = projectRow.querySelector('[' + OWN + '="add"]')
+          if (kept) return
+        }
+        if (projectRow.querySelector('[' + OWN + '="add"]')) {
+          headerAddMemo.add(projectRow)
+          return
+        }
 
         const button = document.createElement('button')
         button.type = 'button'
@@ -674,6 +687,7 @@ window.__ModuleLoader__.load({
         if (selectAll && selectAll.parentNode) selectAll.after(button)
         else if (rowMenu && rowMenu.parentNode) rowMenu.parentNode.insertBefore(button, rowMenu)
         else projectRow.appendChild(button)
+        headerAddMemo.add(projectRow)
       }
 
       /** Inline "new folder" input directly under the workspace row. */
@@ -716,7 +730,6 @@ window.__ModuleLoader__.load({
             return
           }
           store.operate({ op: 'create', workspaceId, name: value })
-            .then(() => store.refresh())
             .catch(showError)
         }
         input.addEventListener('keydown', (event) => {
@@ -751,6 +764,7 @@ window.__ModuleLoader__.load({
             return
           }
           treeMissingReported = false
+          cachedTree = tree
           const model = store.get()
           // Adopt the fold state the user left behind, once, as soon as the Host model lands.
           if (!seededPrefs && model.phase === 'ready') {
@@ -957,19 +971,25 @@ window.__ModuleLoader__.load({
         document.addEventListener('dragstart', onDragStart, true)
         document.addEventListener('pointerdown', onPointerDown, true)
 
-        // Only tree-region mutations matter. Observing body catches the chat stream too, and a
-        // pass per token would be pure jank.
+        // Only tree-region mutations matter, but the observer sees the chat stream too: during
+        // streaming this callback runs many times a second. It therefore never queries the DOM in
+        // the common case — it reuses the connected tree it already knows, and only searches again
+        // when that node has been replaced.
         observer = new MutationObserver((records) => {
           if (busy) return
-          const tree = treeOf()
-          if (!tree) return
+          let tree = cachedTree
+          if (!tree || !tree.isConnected) {
+            tree = treeOf()
+            cachedTree = tree
+            if (!tree) return
+          }
           for (const record of records) {
             const target = record.target
-            if (target === tree || (target && typeof target.contains === 'function' && target.contains(tree))) {
+            if (target === tree || tree.contains(target)) {
               schedule()
               return
             }
-            if (tree.contains(target)) {
+            if (target && typeof target.contains === 'function' && target.contains(tree)) {
               schedule()
               return
             }
